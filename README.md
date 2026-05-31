@@ -47,9 +47,13 @@ Press `ESC` to exit, `M` to skip to next mode, `R` to restart.
 ## Repository Structure
 touchless-hci/
 ├── aac.py
+
 ├── web_panel_app.py
+
 ├── requirements.txt
+
 ├── LICENSE
+
 └── README.md
 
 ## Technologies
