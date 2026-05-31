@@ -36,9 +36,7 @@ def save_messages():
 
 load_messages()
 
-# ── Sekme Mantigi ─────────────────────────────────
-# Klinik (hastane): saglik, acil, aac buton secimleri
-# Aile: iletisim kategorisi ve Aileye_Mesaj butonu
+
 
 def is_aile(msg):
     return (msg.get("kategori") in ("iletisim",) or
@@ -46,9 +44,9 @@ def is_aile(msg):
             "Aileye" in msg.get("mesaj",""))
 
 def is_klinik(msg):
-    return True   # Klinik sekmesi hepsini gorur
+    return True  
 
-# ── HTML ─────────────────────────────────────────
+#HTML
 PANEL_HTML = r"""
 <!DOCTYPE html>
 <html lang="tr">
@@ -110,6 +108,8 @@ header h1{font-size:1.1rem;font-weight:600;flex:1}
 .kat{font-size:.68rem;padding:2px 8px;border-radius:5px;background:#334155;color:#94a3b8}
 .kat.aac{background:#164e63;color:#67e8f9}
 .zaman{margin-left:auto;font-size:.72rem;color:#64748b}
+.btn-sil{background:transparent;border:none;color:#64748b;cursor:pointer;font-size:1rem;padding:2px 8px;border-radius:5px;transition:.15s}
+.btn-sil:hover{background:#450a0a;color:#fca5a5}
 
 .card-msg{font-size:.93rem;color:#e2e8f0;margin-bottom:5px;line-height:1.5}
 .card-ifade{font-size:.78rem;color:#94a3b8;font-style:italic;margin-bottom:10px}
@@ -130,7 +130,7 @@ header h1{font-size:1.1rem;font-weight:600;flex:1}
 <body>
 
 <header>
-  <h1>🏥 Hasta Takip Paneli</h1>
+  <h1> Hasta Takip Paneli</h1>
   <span id="badge" class="live-badge off">Bağlanıyor...</span>
 </header>
 
@@ -229,6 +229,7 @@ function kartHtml(m) {
         <span class="aci aci-${aci}">${aci.toUpperCase()}</span>
         <span class="kat ${isAac?'aac':''}">${kat.replace('_',' ')}</span>
         <span class="zaman">${zamanFark(m.zaman)}</span>
+        <button class="btn-sil" onclick="mesajSil(${m.id})" title="Bu bildirimi sil">✕</button>
       </div>
       <div class="card-msg">${m.mesaj || ''}</div>
       <div class="card-ifade">Hasta: "${m.ifade || ''}"</div>
@@ -301,6 +302,11 @@ function okundu(id) {
   fetch('/api/mesajlar/' + id + '/okundu', {method:'POST'}).then(yukle);
 }
 
+function mesajSil(id) {
+  if (!confirm('Bu bildirim silinsin mi?')) return;
+  fetch('/api/mesajlar/' + id, {method:'DELETE'}).then(yukle);
+}
+
 function temizle() {
   if (!confirm('Tüm kayıtlar silinsin mi?')) return;
   fetch('/api/mesajlar/temizle', {method:'POST'}).then(yukle);
@@ -313,7 +319,7 @@ setInterval(yukle, 4000);
 </html>
 """
 
-# ── API ───────────────────────────────────────────
+#API
 @app.route("/")
 def index():
     return render_template_string(PANEL_HTML)
@@ -347,6 +353,13 @@ def okundu_isaretle(mid):
             save_messages()
             return jsonify({"durum": "ok"})
     return jsonify({"hata": "bulunamadi"}), 404
+
+@app.route("/api/mesajlar/<int:mid>", methods=["DELETE"])
+def mesaj_sil(mid):
+    global messages
+    messages = [m for m in messages if m["id"] != mid]
+    save_messages()
+    return jsonify({"durum": "ok"})
 
 @app.route("/api/mesajlar/temizle", methods=["POST"])
 def temizle():
