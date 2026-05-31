@@ -1,5 +1,5 @@
 """
-Touchless HCI - AAC Sistemi (Final)
+Touchless HCI - AAC Sistemi 
 """
 
 import cv2, mediapipe as mp, time, csv, os, json, math
@@ -8,24 +8,28 @@ import speech_recognition as sr, urllib.request, urllib.error
 from datetime import datetime
 
 DWELL_TIME      = 1.0
-GESTURE_TIMEOUT = 6.0
+GESTURE_TIMEOUT = 10.0
 GESTURE_HOLD    = 0.4
-VOICE_TIMEOUT   = 6.0
+VOICE_TIMEOUT   = 10.0
 PARTICIPANT_ID  = "P01"
 
 GROQ_API_KEY = "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"
 GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
 WEB_PANEL_URL = "http://localhost:5000/api/mesaj"
 
+
+BASE_W, BASE_H = 820, 600
+
 BUTTONS = [
-    (60,  110, 220, 120, "Su_Iste",      "ihtiyac",  "SU",   "Su istedin"),
-    (300, 110, 220, 120, "Tuvalete_Git", "ihtiyac",  "WC",   "Tuvalete gitmek istedin"),
-    (540, 110, 220, 120, "Yardim_Cagir", "ihtiyac",  "SOS",  "Yardim cagirdin"),
-    (60,  250, 220, 120, "TV_Ac",        "konfor",   "TV",   "TV'yi actin"),
-    (300, 250, 220, 120, "Isigi_Ac",     "konfor",   "ISIK", "Isigi actin"),
-    (540, 250, 220, 120, "Aileye_Mesaj", "iletisim", "MSJ",  "Aileye mesaj gonderdin"),
-    (230, 390, 360, 100, "AI_Komut",     "ai",       "AI",   "AI komutu"),
+    (60,  120, 200, 110, "Su_Iste",      "ihtiyac",  "SU",   "Su istedin"),
+    (310, 120, 200, 110, "Tuvalete_Git", "ihtiyac",  "WC",   "Tuvalete gitmek istedin"),
+    (560, 120, 200, 110, "Yardim_Cagir", "ihtiyac",  "SOS",  "Yardim cagirdin"),
+    (60,  280, 200, 110, "TV_Ac",        "konfor",   "TV",   "TV'yi actin"),
+    (310, 280, 200, 110, "Isigi_Ac",     "konfor",   "ISIK", "Isigi actin"),
+    (560, 280, 200, 110, "Aileye_Mesaj", "iletisim", "MSJ",  "Aileye mesaj gonderdin"),
+    (160, 420, 500, 90,  "AI_Komut",     "ai",       "SOYLE", "Ihtiyacini soyledin"),
 ]
+
 CAT_COLORS = {
     "ihtiyac":  (60,  60,  200),
     "konfor":   (200, 130, 50),
@@ -34,9 +38,11 @@ CAT_COLORS = {
 }
 
 VOICE_CMDS = {
-    "seç":"S","sec":"S","seçim":"S","seç seç":"S","select":"S",
-    "tamam":"S","evet":"S","onayla":"S",
-    "iptal":"C","cancel":"C","hayır":"C","vazgeç":"C",
+    "seç":"S","sec":"S","seçim":"S","secim":"S","select":"S",
+    "tamam":"S","evet":"S","onayla":"S","onay":"S","kabul":"S",
+    "olur":"S","oldu":"S","tamamdir":"S","tamamdır":"S",
+    "iptal":"C","cancel":"C","hayır":"C","hayir":"C",
+    "vazgeç":"C","vazgec":"C","geri":"C","yok":"C","istemiyorum":"C",
 }
 
 MODE_ORDER = ["gesture", "voice", "single"]
@@ -95,16 +101,37 @@ class MicManager:
     def _run(self):
         try:
             with sr.Microphone() as src:
-                self.rec.adjust_for_ambient_noise(src, duration=1)
+                self.rec.adjust_for_ambient_noise(src, duration=1.5)
+                self.rec.energy_threshold = 200      # Daha hassas (varsayılan 300)
+                self.rec.dynamic_energy_threshold = True
+                self.rec.pause_threshold = 0.6       # Konuşma duraklamasını daha hızlı yakala
+
                 print("Mikrofon hazir.")
                 while not self._stop:
                     if self.mode == "idle":
                         time.sleep(0.05); continue
                     try:
                         if self.mode == "voice":
-                            audio = self.rec.listen(src, timeout=2, phrase_time_limit=3)
-                            text  = self.rec.recognize_google(audio, language="tr-TR").lower().strip()
-                            cmd   = VOICE_CMDS.get(text)
+                            audio = self.rec.listen(src, timeout=3, phrase_time_limit=4)
+
+                            
+                            text = self.rec.recognize_google(audio, language="tr-TR").lower().strip()
+                            cmd = VOICE_CMDS.get(text)
+                            # Tam eşleşme yoksa, kelime kelime ara
+                            if cmd is None:
+                               for word in text.split():
+                                   if word in VOICE_CMDS:
+                                        cmd = VOICE_CMDS[word]
+                                        break
+# Hala yoksa, kısmi eşleşme dene (örn. "seçtim", "iptal et")
+                            if cmd is None:
+                                for key, val in VOICE_CMDS.items():
+                                     if key in text or text in key:
+                                           cmd = val
+                                           break
+
+
+
                             if cmd: self.cmd_q.put(cmd)
                             print(f"Ses: '{text}' -> {cmd or '?'}")
                         elif self.mode == "ai_listen":
@@ -222,11 +249,15 @@ except Exception:
     SW, SH = 1920, 1080
 
 def fit(img):
-    h, w = img.shape[:2]; s = min(SW/w, SH/h)
-    nw, nh = int(w*s), int(h*s)
-    r = cv2.resize(img, (nw, nh))
+    """Görüntüyü ekran boyutuna sığacak şekilde ölçekle ve ortala."""
+    h, w = img.shape[:2]
+    # En-boy oranını koru, ekrana sığ
+    s = min(SW / w, SH / h)
+    nw, nh = int(w * s), int(h * s)
+    r = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    # Siyah arka plan üzerine ortala
     c = np.zeros((SH, SW, 3), dtype=np.uint8)
-    yo, xo = (SH-nh)//2, (SW-nw)//2
+    yo, xo = (SH - nh) // 2, (SW - nw) // 2
     c[yo:yo+nh, xo:xo+nw] = r
     return c
 
@@ -278,14 +309,27 @@ def draw_btn(frame, btn, prog=0, hov=False, done=False,
         cv2.rectangle(frame, (x+5,y+h-12), (x+5+bw,y+h-5), (0,220,255), -1)
     tc = (90,90,90) if dim else (255,255,255)
     sz = 2 if not dim else 1
-    put(frame, icon,                   (x+w//2-30, y+55),  1.0, tc, sz)
-    put(frame, label.replace("_"," "), (x+15, y+h-25),     .52, tc, 1)
+
+    # ── Ikon / Buyuk baslik ──
+    if label == "AI_Komut":
+        put(frame, "IHTIYACIMI SOYLE", (x+w//2-150, y+50), .95, tc, sz)
+    else:
+        put(frame, icon, (x+w//2-30, y+55), 1.0, tc, sz)
+
+    # ── Alt yazi (sadece normal butonlarda) ──
+    if label != "AI_Komut":
+        put(frame, label.replace("_"," "), (x+15, y+h-25), .52, tc, 1)
+
+    # ── Pending durumu hint ──
     if pend:
         hint = "'SEC'/'IPTAL'" if MODE == "voice" else "Jest yap"
         put(frame, hint, (x+15, y+h-8), .38, (255,255,0), 1)
-    if label == "AI_Komut" and not dim:
-        put(frame, "Dogal dil komutu", (x+40, y+h-8), .38, (0,220,200), 1)
 
+    # ── AI butonu alt aciklama ──
+    if label == "AI_Komut" and not dim:
+        put(frame, "Konusarak ihtiyacinizi soyleyin",
+            (x+w//2-145, y+h-12), .52, (0,230,210), 1)
+        
 def isin(cx, cy, btn):
     x,y,w,h = btn[0],btn[1],btn[2],btn[3]
     return x < cx < x+w and y < cy < y+h
@@ -371,7 +415,7 @@ def show_intro():
     elif MODE=="voice":   h = "Hover sonra: 'SEC' veya 'IPTAL' soyle"
     else:                 h = "Hover sonra: Bas parmak YUKARI=ONAY / ASAGI=IPTAL"
     put(s, h, (130,220), .6, (180,220,180), 1)
-    put(s, "AI butonu: dogal dilde soyleyin (ornek: 'Basim agriyor')",
+    put(s, "'Ihtiyacini Soyle' butonu: konusarak ihtiyacinizi belirtin",
         (130,270), .55, (0,220,200), 1)
     put(s, "Istediginiz butonu secmekte ozgursunuz", (130,320), .55, (200,200,200), 1)
     cv2.imshow(WN, fit(s))
@@ -431,6 +475,7 @@ def calibrate(hands_obj):
             ret, frm = cap.read()
             if not ret: continue
             frm = cv2.flip(frm, 1)
+            frm = cv2.resize(frm, (BASE_W, BASE_H), interpolation=cv2.INTER_LINEAR)
             res = hands_obj.process(cv2.cvtColor(frm, cv2.COLOR_BGR2RGB))
             ang = None
             if res.multi_hand_landmarks:
@@ -474,7 +519,10 @@ def run_session():
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret: break
-            frame = cv2.flip(frame, 1); hf, wf, _ = frame.shape
+            frame = cv2.flip(frame, 1)
+            frame = cv2.resize(frame, (BASE_W, BASE_H), interpolation=cv2.INTER_LINEAR)
+            hf, wf, _ = frame.shape
+
             res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             ov = frame.copy()
             cv2.rectangle(ov, (0,0), (wf,100), (0,0,0), -1)
@@ -606,11 +654,19 @@ def run_session():
                             time.sleep(.3); sel.clear() 
                             
                         elif  btn[4] == "AI_Komut":
-                            if ai_state == "idle":
-                                pb=(i,btn,now,now); cg=None; gt=None
-                                log("HOVER_PEND","AI_Komut")
+                            if MODE == "single":
+                                if ai_state == "idle":
+                                   mic.set_idle(); time.sleep(0.3)
+                                   while not mic.cmd_q.empty(): mic.cmd_q.get()
+                                   while not mic.ai_q.empty():  mic.ai_q.get()
+                                   ai_state = "listening"; mic.set_ai()
+                                   log("AI_ACTIVATED","AI_Komut")
+                                   fb = "Ihtiyacinizi soyleyin..."; fbt = now
+                            else:
+                                if ai_state == "idle":
+                                   pb=(i,btn,now,now); cg=None; gt=None
+                                   log("HOVER_PEND","AI_Komut")
 
-                        
                         elif MODE == "single":
                             if btn[4] == "Aileye_Mesaj":
                                 mic.set_idle(); time.sleep(0.3)
@@ -645,6 +701,14 @@ def run_session():
                 rem = max(0, (GESTURE_TIMEOUT if MODE=="gesture" else VOICE_TIMEOUT)-(now-tp))
                 cv2.rectangle(frame,(100,505),(720,598),(80,60,140),-1)
                 cv2.rectangle(frame,(100,505),(720,598),(200,100,255),3)
+                # Geri sayim cubugu (uzerinde)
+                timeout_dur = GESTURE_TIMEOUT if MODE == "gesture" else VOICE_TIMEOUT
+                bar_w = int(620 * (rem / timeout_dur))
+                bar_color = (100, 255, 100) if rem > 5 else ((100, 200, 255) if rem > 2 else (100, 100, 255))
+                cv2.rectangle(frame, (100, 500), (100 + bar_w, 505), bar_color, -1)
+
+
+
                 if MODE == "voice":
                     put(frame,"SES BEKLENIYOR",   (255,543), .7, (255,255,255), 2)
                     put(frame, f"'SEC' veya 'IPTAL' soyleyin ({rem:.1f}s)", (200,572), .47, (220,210,255), 1)
